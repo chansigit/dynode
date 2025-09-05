@@ -1,105 +1,257 @@
+"""
+Autoencoder implementation based on abstract base classes.
+"""
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from typing import Dict, Optional, List
 from utils.ffn import FFN
+from .abstract_ae import BaseEmbeddingModel, BaseEncoder, BaseDecoder
 
 
-class Autoencoder(nn.Module):
-    """
-    Simple autoencoder using FFN modules for encoding and decoding.
+class FFNEncoder(BaseEncoder):
+    """Encoder using FFN modules."""
     
-    Architecture:
-        Input -> FFN Encoder -> Latent -> FFN Decoder -> Output
-    
-    Args:
-        input_dim (int): Input dimension.
-        latent_dim (int): Latent space dimension.
-        encoder_hidden_dim (int | None): Hidden dimension for encoder FFN.
-        decoder_hidden_dim (int | None): Hidden dimension for decoder FFN.
-        encoder_kind (str): Activation type for encoder {"swiglu", "geglu", "gelu", "silu"}.
-        decoder_kind (str): Activation type for decoder {"swiglu", "geglu", "gelu", "silu"}.
-        dropout (float): Dropout probability for both encoder and decoder.
-        bias (bool): Whether to use bias in linear layers.
-        spectral_norm (bool): Whether to apply spectral normalization.
-        align_to (int | None): Alignment for auto-inferred hidden dims.
-    """
     def __init__(
         self,
         input_dim: int,
         latent_dim: int,
-        encoder_hidden_dim: int | None = None,
-        decoder_hidden_dim: int | None = None,
-        encoder_kind: str = "swiglu",
-        decoder_kind: str = "swiglu",
+        hidden_dims: Optional[List[int]] = None,
+        activation: str = "swiglu",
         dropout: float = 0.0,
         bias: bool = False,
         spectral_norm: bool = False,
-        align_to: int | None = None,
+        condition_dim: Optional[int] = None,
     ):
-        super().__init__()
+        super().__init__(input_dim, latent_dim, condition_dim)
         
-        self.input_dim = input_dim
-        self.latent_dim = latent_dim
+        # Adjust input dimension if conditioning is used
+        actual_input_dim = input_dim
+        if condition_dim is not None:
+            actual_input_dim += condition_dim
         
-        # Encoder: input_dim -> latent_dim
-        self.encoder = FFN(
-            d_model=input_dim,
-            hidden_dim=encoder_hidden_dim,
-            out_dim=latent_dim,
-            kind=encoder_kind,
+        if hidden_dims and len(hidden_dims) > 0:
+            # Multi-layer encoder
+            self.layers = nn.ModuleList()
+            prev_dim = actual_input_dim
+            
+            for hidden_dim in hidden_dims:
+                self.layers.append(FFN(
+                    d_model=prev_dim,
+                    hidden_dim=hidden_dim,
+                    out_dim=hidden_dim,
+                    kind=activation,
+                    dropout=dropout,
+                    bias=bias,
+                    spectral_norm=spectral_norm,
+                ))
+                prev_dim = hidden_dim
+            
+            # Final layer to latent
+            self.fc_latent = nn.Linear(prev_dim, latent_dim, bias=bias)
+        else:
+            # Single FFN encoder
+            self.encoder_ffn = FFN(
+                d_model=actual_input_dim,
+                out_dim=latent_dim,
+                kind=activation,
+                dropout=dropout,
+                bias=bias,
+                spectral_norm=spectral_norm,
+            )
+            self.layers = None
+    
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        condition: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        # Concatenate conditioning if provided
+        if condition is not None and self.condition_dim is not None:
+            x = torch.cat([x, condition], dim=-1)
+        
+        if self.layers is not None:
+            # Multi-layer encoder
+            h = x
+            for layer in self.layers:
+                h = layer(h)
+            return self.fc_latent(h)
+        else:
+            # Single FFN encoder
+            return self.encoder_ffn(x)
+
+
+class FFNDecoder(BaseDecoder):
+    """Decoder using FFN modules."""
+    
+    def __init__(
+        self,
+        latent_dim: int,
+        output_dim: int,
+        hidden_dims: Optional[List[int]] = None,
+        activation: str = "swiglu",
+        dropout: float = 0.0,
+        bias: bool = False,
+        spectral_norm: bool = False,
+        condition_dim: Optional[int] = None,
+    ):
+        super().__init__(latent_dim, output_dim, condition_dim)
+        
+        # Adjust input dimension if conditioning is used
+        actual_input_dim = latent_dim
+        if condition_dim is not None:
+            actual_input_dim += condition_dim
+        
+        if hidden_dims and len(hidden_dims) > 0:
+            # Multi-layer decoder
+            self.layers = nn.ModuleList()
+            prev_dim = actual_input_dim
+            
+            for hidden_dim in hidden_dims:
+                self.layers.append(FFN(
+                    d_model=prev_dim,
+                    hidden_dim=hidden_dim,
+                    out_dim=hidden_dim,
+                    kind=activation,
+                    dropout=dropout,
+                    bias=bias,
+                    spectral_norm=spectral_norm,
+                ))
+                prev_dim = hidden_dim
+            
+            # Final layer to output
+            self.fc_output = nn.Linear(prev_dim, output_dim, bias=bias)
+        else:
+            # Single FFN decoder
+            self.decoder_ffn = FFN(
+                d_model=actual_input_dim,
+                out_dim=output_dim,
+                kind=activation,
+                dropout=dropout,
+                bias=bias,
+                spectral_norm=spectral_norm,
+            )
+            self.layers = None
+    
+    def forward(
+        self, 
+        z: torch.Tensor, 
+        condition: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        # Concatenate conditioning if provided
+        if condition is not None and self.condition_dim is not None:
+            z = torch.cat([z, condition], dim=-1)
+        
+        if self.layers is not None:
+            # Multi-layer decoder
+            h = z
+            for layer in self.layers:
+                h = layer(h)
+            return self.fc_output(h)
+        else:
+            # Single FFN decoder
+            return self.decoder_ffn(z)
+
+
+class Autoencoder(BaseEmbeddingModel):
+    """
+    Standard Autoencoder implementation.
+    
+    Args:
+        input_dim: Input dimension
+        latent_dim: Latent space dimension
+        output_dim: Output dimension (defaults to input_dim)
+        encoder_hidden_dims: List of hidden dimensions for encoder
+        decoder_hidden_dims: List of hidden dimensions for decoder
+        activation: Activation type {"swiglu", "geglu", "gelu", "silu"}
+        dropout: Dropout probability
+        bias: Whether to use bias in linear layers
+        spectral_norm: Whether to apply spectral normalization
+        condition_dim: Conditioning vector dimension (for conditional AE)
+    """
+    
+    def __init__(
+        self,
+        input_dim: int,
+        latent_dim: int,
+        output_dim: Optional[int] = None,
+        encoder_hidden_dims: Optional[List[int]] = None,
+        decoder_hidden_dims: Optional[List[int]] = None,
+        activation: str = "swiglu",
+        dropout: float = 0.0,
+        bias: bool = False,
+        spectral_norm: bool = False,
+        condition_dim: Optional[int] = None,
+    ):
+        super().__init__(input_dim, latent_dim, output_dim, condition_dim)
+        
+        self.encoder_module = FFNEncoder(
+            input_dim=input_dim,
+            latent_dim=latent_dim,
+            hidden_dims=encoder_hidden_dims,
+            activation=activation,
             dropout=dropout,
             bias=bias,
             spectral_norm=spectral_norm,
-            align_to=align_to,
+            condition_dim=condition_dim,
         )
         
-        # Decoder: latent_dim -> input_dim
-        self.decoder = FFN(
-            d_model=latent_dim,
-            hidden_dim=decoder_hidden_dim,
-            out_dim=input_dim,
-            kind=decoder_kind,
+        self.decoder_module = FFNDecoder(
+            latent_dim=latent_dim,
+            output_dim=self.output_dim,
+            hidden_dims=decoder_hidden_dims,
+            activation=activation,
             dropout=dropout,
             bias=bias,
             spectral_norm=spectral_norm,
-            align_to=align_to,
+            condition_dim=condition_dim,
         )
     
-    def encode(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Encode input to latent representation.
-        
-        Args:
-            x: Input tensor of shape (..., input_dim).
-        
-        Returns:
-            Latent tensor of shape (..., latent_dim).
-        """
-        return self.encoder(x)
+    def encode(
+        self, 
+        x: torch.Tensor, 
+        condition: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        return self.encoder_module(x, condition)
     
-    def decode(self, z: torch.Tensor) -> torch.Tensor:
-        """
-        Decode latent representation to output.
-        
-        Args:
-            z: Latent tensor of shape (..., latent_dim).
-        
-        Returns:
-            Output tensor of shape (..., input_dim).
-        """
-        return self.decoder(z)
+    def decode(
+        self, 
+        z: torch.Tensor, 
+        condition: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        return self.decoder_module(z, condition)
     
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Forward pass through the autoencoder.
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        condition: Optional[torch.Tensor] = None
+    ) -> Dict[str, torch.Tensor]:
+        latent = self.encode(x, condition)
+        reconstruction = self.decode(latent, condition)
         
-        Args:
-            x: Input tensor of shape (..., input_dim).
+        return {
+            'reconstruction': reconstruction,
+            'latent': latent,
+        }
+    
+    def loss(
+        self,
+        x: torch.Tensor,
+        outputs: Dict[str, torch.Tensor],
+        reduction: str = 'mean',
+        **kwargs
+    ) -> Dict[str, torch.Tensor]:
+        reconstruction = outputs['reconstruction']
         
-        Returns:
-            Tuple of (reconstructed, latent):
-                - reconstructed: Output tensor of shape (..., input_dim)
-                - latent: Latent representation of shape (..., latent_dim)
-        """
-        latent = self.encode(x)
-        reconstructed = self.decode(latent)
-        return reconstructed, latent
+        # Reconstruction loss (MSE)
+        if reduction == 'mean':
+            recon_loss = F.mse_loss(reconstruction, x)
+        else:
+            recon_loss = F.mse_loss(reconstruction, x, reduction='none')
+            recon_loss = recon_loss.sum(dim=-1).mean()
+        
+        return {
+            'total': recon_loss,
+            'reconstruction': recon_loss,
+        }
