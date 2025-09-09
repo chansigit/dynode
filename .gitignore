@@ -1,0 +1,155 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+.ipynb_checkpoints/
+*.ipynb
+
+# pyenv
+.python-version
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Model files
+*.pt
+*.pth
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.ckpt
+checkpoint/
+checkpoints/
+models/
+saved_models/
+
+# Image files
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.svg
+*.tif
+*.tiff
+
+# Data files (but keep small config files)
+*.csv
+*.tsv
+*.parquet
+*.feather
+*.npy
+*.npz
+*.zarr
+*.h5ad
+*.loom
+
+# Logs
+*.log
+logs/
+*.out
+*.err
+
+# Test files
+test_*.py
+*_test.py
+tests/
+testing/
+test_output/
+test_results/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# Documentation builds
+docs/_build/
+docs/build/
+
+# Scratch work
+scratch/
+sandbox/
+playground/
+
+# Large data directories
+data/
+raw_data/
+processed_data/
+results/
+outputs/
+figures/
+
+# Slurm output
+slurm-*.out
+*.slurm.out
+
+# But keep important config/setup files
+!.gitignore
+!.gitkeep
+!requirements.txt
+!setup.py
+!setup.cfg
+!README.md
+!LICENSE
