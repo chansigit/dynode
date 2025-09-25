@@ -1,4 +1,4 @@
-# dynode
+# EquiVelo
 
 
 ---
