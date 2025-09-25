@@ -179,6 +179,8 @@ class VAEDecoder(BaseDecoder):
         # Apply output activation if specified
         if self.output_activation == "softplus":
             output = F.softplus(output)
+        elif self.output_activation == "relu":
+            output = F.relu(output)
         elif self.output_activation == "sigmoid":
             output = torch.sigmoid(output)
         
@@ -323,60 +325,68 @@ class VAE(BaseEmbeddingModel):
             'mu': mu,
             'log_var': log_var,
         }
-    
+
     def loss(
         self,
         x: torch.Tensor,
         outputs: Dict[str, torch.Tensor],
-        reduction: str = 'mean',
-        **kwargs
+        reduction: str = "mean",
+        beta: float = 1.0,
+        logvar_clamp: tuple = (-20.0, 2.0),
     ) -> Dict[str, torch.Tensor]:
         """
-        Compute VAE loss = Reconstruction loss + β * KL divergence.
-        
+        Compute VAE loss = Reconstruction (per-sample sum) + beta * KL (per-sample sum).
+        Then aggregate across the batch according to `reduction`.
+    
         Args:
-            x: Original input
-            outputs: Output dictionary from forward pass
-            reduction: Loss reduction method {'mean', 'sum', 'none'}
-            **kwargs: Additional arguments (e.g., beta override)
-        
+            x: ground-truth input, shape [B, ...]
+            outputs: dict with keys {'reconstruction', 'mu', 'log_var'}
+            reduction: 'mean' | 'sum' | 'none'
+                - 'mean': average over batch
+                - 'sum': sum over batch
+                - 'none': return per-sample losses (shape [B])
+            beta: weight on KL term
+            logvar_clamp: (min, max) clamp range for numerical stability
+    
         Returns:
-            Dictionary with:
-                - 'total': Total loss
-                - 'reconstruction': Reconstruction loss  
-                - 'kl': KL divergence loss
+            Dict with keys:
+                'total', 'reconstruction', 'kl'
+                Each is a scalar for 'mean'/'sum', or a [B] tensor for 'none'.
         """
-        reconstruction = outputs['reconstruction']
-        mu = outputs['mu']
-        log_var = outputs['log_var']
-        
-        # Get beta (allow override from kwargs)
-        beta = kwargs.get('beta', self.beta)
-        
-        # Reconstruction loss
-        if reduction == 'mean':
-            recon_loss = F.mse_loss(reconstruction, x)
+        recon = outputs["reconstruction"]
+        mu = outputs["mu"]
+        log_var = outputs["log_var"]
+    
+        # ---- Reconstruction term (per-sample sum) ----
+        # Use elementwise MSE, then sum over all non-batch dims to get per-sample losses.
+        recon_elwise = F.mse_loss(recon, x, reduction="none")           # [B, ...]
+        recon_per = recon_elwise.view(recon_elwise.size(0), -1).sum(1)  # [B]
+    
+        # ---- KL term (per-sample sum) ----
+        # KL(N(mu, sigma^2) || N(0, I)) = -0.5 * sum(1 + log_var - mu^2 - exp(log_var))
+        log_var = torch.clamp(log_var, min=logvar_clamp[0], max=logvar_clamp[1])
+        var = torch.exp(log_var)
+        kl_elwise = -0.5 * (1.0 + log_var - mu.pow(2) - var)            # [B, latent_dims...]
+        kl_per = kl_elwise.view(kl_elwise.size(0), -1).sum(1)           # [B]
+    
+        # ---- Aggregate across batch ----
+        if reduction == "mean":
+            recon_loss = recon_per.mean()
+            kl_loss = kl_per.mean()
+            total = recon_loss + beta * kl_loss
+        elif reduction == "sum":
+            recon_loss = recon_per.sum()
+            kl_loss = kl_per.sum()
+            total = recon_loss + beta * kl_loss
+        elif reduction == "none":
+            recon_loss = recon_per
+            kl_loss = kl_per
+            total = recon_loss + beta * kl_loss
         else:
-            recon_loss = F.mse_loss(reconstruction, x, reduction='none')
-            recon_loss = recon_loss.sum(dim=-1).mean()
-        
-        # KL divergence loss
-        # KL(N(μ, σ²) || N(0, 1)) = -0.5 * Σ(1 + log(σ²) - μ² - σ²)
-        kl_loss = -0.5 * (1 + log_var - mu.pow(2) - log_var.exp())
-        
-        if reduction == 'mean':
-            kl_loss = kl_loss.mean()
-        else:
-            kl_loss = kl_loss.sum(dim=-1).mean()
-        
-        # Total loss
-        total_loss = recon_loss + beta * kl_loss
-        
-        return {
-            'total': total_loss,
-            'reconstruction': recon_loss,
-            'kl': kl_loss,
-        }
+            raise ValueError(f"Unknown reduction: {reduction}")
+    
+        return {"total": total, "reconstruction": recon_loss, "kl": kl_loss} 
+    
     
     def sample(
         self, 
