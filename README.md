@@ -12,7 +12,7 @@ TODO:
   - 🚧  VQ-VAE
   - 💤 scGPT
 - [x] Dynamics module
-  - 🚧  Base class
+  - ✅  Base class
   - 🚧  GNN
-  - 🚧  Attention
+  - ✅  Attention
 - [ ] Visualization module
